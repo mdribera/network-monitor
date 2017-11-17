@@ -1,0 +1,2 @@
+requests
+https://cdn.mysql.com/Downloads/Connector-Python/mysql-connector-python-2.1.7.tar.gz
