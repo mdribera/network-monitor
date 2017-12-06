@@ -2,18 +2,20 @@
 
 import os
 import sys
-from datetime import datetime
+from datetime import (datetime, timedelta)
 
 import requests
 import mysql.connector
 
-GET_DEVICES = 'select e.mac, e.vendor, e.ip, e.status ' \
+GET_DEVICES = 'select e.id, e.mac, e.vendor, e.ip, e.last_seen_at ' \
               'from nm_device_events e ' \
-              'inner join (select mac, max(created_at) as latest from nm_device_events group by mac) d ' \
-              'on e.mac = d.mac and e.created_at = d.latest;'
+              'inner join (select mac, max(connected_at) as latest from nm_device_events group by mac) d ' \
+              'on e.mac = d.mac and e.connected_at = d.latest;'
 
-INSERT_EVENT = 'insert into nm_device_events (mac, vendor, ip, status, created_at) ' \
-               'values (%(mac)s, %(vendor)s, %(ip)s, %(status)s, now());'
+INSERT_EVENT = 'insert into nm_device_events (mac, vendor, ip, connected_at) ' \
+               'values (%(mac)s, %(vendor)s, %(ip)s, now());'
+
+UPDATE_SEEN_AT = 'update nm_device_events set last_seen_at = now() where id in (%s);'
 
 IFTTT_MAKER_URL = 'https://maker.ifttt.com/trigger/network_event/with/key/%s' % os.environ['IFTTT_API_KEY']
 MACVENDOR_URL = 'https://api.macvendors.com/'
@@ -21,6 +23,12 @@ MACVENDOR_URL = 'https://api.macvendors.com/'
 
 def create_device_event(data):
     cursor.execute(INSERT_EVENT, data)
+    cnx.commit()
+
+
+def update_seen_at(rows_to_update):
+    enough_blanks = ', '.join(['%s'] * len(rows_to_update))
+    cursor.execute(UPDATE_SEEN_AT % enough_blanks, rows_to_update)
     cnx.commit()
 
 
@@ -47,17 +55,11 @@ def send_telegram_notification(payload):
     if resp.status_code is 200:
         print('notification sent!')
     else:
-        print('notification error :(')
+        print('notification error: %s' % str(resp))
 
 
 def main():
-    known_devices = {}
-    known_macs = []
-    devices = get_known_devices()
-    for device in devices:
-        mac = device['mac']
-        known_devices[mac] = device
-        known_macs.append(mac)
+    known_devices = {device['mac']: device for device in get_known_devices()}
 
     seen_devices = []
 
@@ -65,37 +67,36 @@ def main():
     for scanned_device in scan.split('Nmap scan'):
         ip = 'x.x.x.x'
         for i, line in enumerate(scanned_device.splitlines()):
-            if i is 0 and 'report for 10.' in line:
+            if i is 0 and 'report for ' in line:
                 ip = line.split()[-1]
             elif i is 2 and 'MAC Address:' in line:
                 mac_addr = line.split()[2]
-                seen_devices.append(mac_addr)
                 vendor = ' '.join(line.split()[3:])[1:-1]
 
-                device_data = {'mac': mac_addr, 'vendor': vendor, 'ip': ip, 'status': 1}
+                device_data = {'mac': mac_addr, 'vendor': vendor, 'ip': ip}
                 prev_event = known_devices[mac_addr] if mac_addr in known_devices else None
 
-                # we've never seen this device before
                 if prev_event is None:
-                    print('NEW DEVICE CONNECTED: %s' % mac_addr)
+                    # we've never seen this device before
+                    print('new device connected: %s' % mac_addr)
                     create_device_event(device_data)
                     send_telegram_notification({'value1': str(vendor), 'value2': str(ip), 'value3': str(mac_addr)})
-                # this is a known device but it just reconnected
-                elif not prev_event['status']:
-                    print('reconnected device: %s' % mac_addr)
+                elif prev_event['last_seen_at'] < dt_stale or prev_event['ip'] != ip:
+                    # this is a known device that has reconnected
                     create_device_event(device_data)
+                else:
+                    # this is a known device that's still connected
+                    seen_devices.append(prev_event['id'])
 
-    # now loop through known devices to check for disconnection
-    for known_mac, known_device in known_devices.items():
-        if known_device['status'] is 1 and known_mac not in seen_devices:
-            print('disconnected device: %s' % known_device['mac'])
-
-            known_device['status'] = 0
-            create_device_event(known_device)
+    # update last_seen_at on all still-connected devices
+    if seen_devices:
+        update_seen_at(seen_devices)
 
 
 if __name__ == '__main__':
-    print('starting scan at %s' % datetime.now())
+    dt_now = datetime.now()
+    dt_stale = dt_now - timedelta(minutes=2)
+    print('starting scan at %s' % dt_now)
 
     # this expects `nmap -sn 10.0.1.0/24` to be run as a superuser and piped in
     scan = sys.stdin.read()
