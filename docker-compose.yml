@@ -1,0 +1,15 @@
+version: "3"
+
+services:
+  db:
+    image: mariadb:5.5
+    restart: always
+    ports:
+    - "${NM_PORT}:3306"
+    volumes:
+      - ./database:/docker-entrypoint-initdb.d:ro
+    environment:
+      MYSQL_ROOT_PASSWORD: "${NM_PASSWORD}"
+      MYSQL_USER: "${NM_USER}"
+      MYSQL_PASSWORD: "${NM_PASSWORD}"
+      MYSQL_DATABASE: "${NM_DATABASE}"
