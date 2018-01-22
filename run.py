@@ -106,7 +106,7 @@ def main():
 
 if __name__ == '__main__':
     dt_now = datetime.now()
-    dt_stale = dt_now - timedelta(minutes=5)
+    dt_stale = dt_now - timedelta(minutes=45)
 
     logging.basicConfig(filename='logs/scan-{}.log'.format(dt_now.strftime('%Y-%m-%d')), level=logging.DEBUG)
     logging.info('starting scan at {}'.format(dt_now))
